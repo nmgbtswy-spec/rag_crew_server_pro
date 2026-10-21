@@ -1,0 +1,56 @@
+# 生产/部署用 compose：不构建，只引用已存在的镜像
+# 用法：docker compose -f docker-compose.prod.yml up -d
+
+services:
+  mcp_server:
+    # 现在用本地镜像；切到远程仓库时改成 ghcr.io/nmgbtswy-spec/rag-crew-demo:1.0.0
+    image: rag-crew-demo-mcp_server:1.0.0
+    container_name: rag_mcp_server
+    command: python rag_mcp_server.py
+    restart: unless-stopped
+    ports:
+      - "8000:8000"          # 仅调试用，正式部署可删掉
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - LLM_NAME=qwen3.5:4b
+      - MODEL_NAME=qwen3-embedding:4b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./chroma_db:/app/chroma_db
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8000),3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web_ui:
+    image: rag-crew-demo-web_ui:1.0.0
+    container_name: rag_web_ui
+    command: python -m streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+    restart: unless-stopped
+    ports:
+      - "8501:8501"
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - MCP_SERVER_URL=http://mcp_server:8000/sse
+      - LLM_NAME=qwen3.5:4b
+      - MODEL_NAME=qwen3-embedding:4b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      mcp_server:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

@@ -1,0 +1,67 @@
+﻿version:  '3.8'
+
+# services 下的键名 mcp_server 就是容器间可用的 DNS 名。web_ui 里访问 http://mcp_server:8000能被解析，靠的就是它。改了这个键名，地址就得跟着改。
+# build: . 让 compose 用当前目录的 Dockerfile 构建。两个服务都 build: . 意味着同一个镜像被构建一次、复用于两个服务（compose 会去重）。
+services:
+  mcp_server:
+    build:  .
+    # 固定容器名，方便 docker logs rag_mcp_server、docker exec -it rag_mcp_server bash。
+    # 代价：固定名字后无法横向扩缩容（一个名字只能对应一个容器）。演示项目无所谓。
+    container_name: rag_mcp_server
+    # 覆盖镜像的默认启动命令。因为依赖是 --system 装的，这里可以直接 python。
+    command:  python rag_mcp_server.py
+    # 格式是 宿主机端口:容器端口。
+    # 注意它的作用范围：只让宿主机能访问。它不会让 web_ui 容器通过 127.0.0.1:8000 访问到 mcp_server。你最初的 bug 就卡在这个误解上。
+    # 实际上容器间通信根本不需要 ports，有服务名 + 同一网络就够了。这里保留 8000:8000 只是为了让你能在 Windows 上用浏览器直接调试 MCP 服务——如果不需要，可以删掉，更安全。
+    ports:
+      - "8000:8000"
+    environment:
+      # host.docker.internal 是 Docker 提供的一个特殊域名，指向宿主机。
+      # 为什么不用 127.0.0.1：容器里的 127.0.0.1 是容器自己。
+      # 为什么不用宿主机的局域网 IP：会变。这个域名稳定。
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      - MCP_HOST=0.0.0.0
+      - LLM_NAME=qwen3.5:4b
+      - MODEL_NAME=qwen3-embedding:4b
+    extra_hosts:
+      # Docker Desktop（Windows/Mac）自带这条映射，但Linux 上没有。写上它，同一份 compose 在哪都能跑。
+      # host-gateway 是 Docker 的特殊值，自动解析成宿主网关地址。
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # 格式 宿主机路径:容器内路径。
+      # 左边是 D:\PythonStu\rag-crew-demo\chroma_db（相对 compose 文件所在目录），右边必须精确对上 WORKDIR /app + 代码里的 ./chroma_db。
+      # 效果：容器读写的就是宿主机那份库。你在宿主上 ingest_pdf.py 灌的数据，容器里立刻能看到。
+      - ./chroma_db:/app/chroma_db
+    healthcheck:
+      # test：在容器内部执行的探活命令。这里用 Python 开一个 TCP 连接再关掉——比 curl 好，因为 slim 镜像里没有 curl。
+      # 为什么不探 GET /sse：SSE 是长连接，探活会挂住不返回。TCP 端口能连上就足以证明进程在监听。
+      # start_period：容器刚起来的 90 秒内，探活失败不计入 retries。mcp_server 要加载 chromadb、连 Ollama，冷启动可能几十秒，没这个参数会被误判成不健康。
+      # interval/timeout/retries：每 10 秒探一次，单次最多 5 秒，连续失败 12 次才判死。
+      test: ["CMD", "python", "-c", "import socket;socket.create_connection(('127.0.0.1',8000),3).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 90s
+
+  web_ui:
+    build:  .
+    container_name: rag_web_ui
+    command: python -m streamlit run app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
+    environment:
+      - OLLAMA_HOST=http://host.docker.internal:11434
+      # 这里就是修 bug 的地方：容器里连 MCP 必须用服务名 mcp_server，不是 127.0.0.1。
+      # 前提是代码真的读这个键。你之前的代码读的是 MVP_SERVER_URL（少了个字母），所以这一行形同虚设。
+      - MCP_SERVER_URL=http://mcp_server:8000/sse
+      - LLM_NAME=qwen3.5:4b
+      - MODEL_NAME=qwen3-embedding:4b
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # depends_on 有两种写法，含义完全不同：
+    #   - mcp_server（列表形式）：只保证"先启动"，不等就绪。MCP 还没监听完就去连，照样 30 秒超时。
+    #   mcp_server: { condition: service_healthy }：等健康检查通过再启动 web_ui。
+    # 这个区别很重要，因为同一个报错可能有两个不同的原因：地址写错、或者对方还没好。加了 condition 才能排除后者。
+    depends_on:
+      mcp_server:
+        condition: service_healthy

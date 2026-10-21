@@ -1,0 +1,26 @@
+# ===== Python =====
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info/
+.venv/
+
+# ===== 本地配置 / 密钥 =====
+.env
+.env.local
+
+# ===== IDE =====
+.idea/
+.vscode/
+.crewai/
+
+# ===== 数据与模型（体积大、可重建）=====
+chroma_db/
+.bge_model/
+H5U_PLC_Manual.pdf
+
+# ===== 临时/备份 =====
+*.bak-*
+*.log

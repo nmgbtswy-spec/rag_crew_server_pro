@@ -1,0 +1,11 @@
+# 含义：所有文件在仓库里和工作区都保持 LF，Windows 上也不转成 CRLF。
+* text=auto
+
+*.sh    text eol=lf
+Dockerfile text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.py    text eol=lf
+*.toml  text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
